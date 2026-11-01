@@ -17,7 +17,7 @@ BASE_URL = f"https://dl-cdn.alpinelinux.org/alpine/v{ALPINE.rpartition('.')[0]}/
 DISK_SIZE = "8G"  # the cloud image is only 128 MiB: far too small to install programs in. Its
                   # first-boot agent (tiny-cloud) grows the filesystem to fill the disk.
 # Raise this whenever PROVISION changes, so images prepared the old way are rebuilt.
-REVISION = 1
+REVISION = 3
 
 # Run once, as root, inside the VM by tiny-cloud, from the config disk. tiny-cloud keeps
 # its output in /var/log/user-data.log, which pipvm reads back if this fails.
@@ -36,6 +36,8 @@ trap finish EXIT
 say "provisioning started"
 
 apk add --no-cache python3 py3-pip pipx openssh ca-certificates
+# What a graphical Python program needs to draw on a display forwarded from the host: Tk and a font.
+apk add --no-cache python3-tkinter font-dejavu
 
 # Installed programs run as an ordinary user. Only the key pipvm made may log in, as that user
 # (to run programs) or as root (to power off cleanly): nothing else has a way in.
@@ -49,8 +51,11 @@ for home in /root /home/pipvm; do
 	chmod 600 "$home/.ssh/authorized_keys"
 done
 chown -R pipvm:pipvm /home/pipvm/.ssh
-sed -i -e '/^#\?PermitRootLogin/d' -e '/^#\?PasswordAuthentication/d' /etc/ssh/sshd_config
-printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\n' >> /etc/ssh/sshd_config
+# sshd uses the first value it finds, so the defaults are deleted rather than overridden. Remote forwards
+# let the host put its X display socket into the guest; only the host's ssh client can ask for one.
+sed -i -e '/^#\?PermitRootLogin/d' -e '/^#\?PasswordAuthentication/d' \
+	-e '/^#\?AllowTcpForwarding/d' -e '/^#\?StreamLocalBindUnlink/d' /etc/ssh/sshd_config
+printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\nAllowTcpForwarding remote\nStreamLocalBindUnlink yes\n' >> /etc/ssh/sshd_config
 rc-update add sshd default || true
 
 # The first-boot agent has done its job: later boots need not wait for it to look for a config disk.

@@ -63,6 +63,18 @@ class App:
     def update(self, **changes):
         self.meta.write_text(json.dumps({**self.info(), **changes}))
 
+    def setting(self, key, default=None):
+        return self.info().get("settings", {}).get(key, default)
+
+    def set_setting(self, key, value):
+        """Save a setting for this app; None removes it, so the default applies again."""
+        settings = dict(self.info().get("settings", {}))
+        if value is None:
+            settings.pop(key, None)
+        else:
+            settings[key] = value
+        self.update(settings=settings)
+
     def spec(self):
         return self.info().get("spec", self.name)
 

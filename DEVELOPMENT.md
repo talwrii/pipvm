@@ -13,6 +13,23 @@ its code, and its `xephyr-run` command, so one `pipx install pipvm` gives you bo
 relative imports (`from . import registry`) so that it works under both names. If you also install `xephyr-run` on
 its own with pipx, the two fight over the `xephyr-run` command; use one of them.
 
+## The display (Xephyr)
+By default `pipvm run` gives the program an X display, shown in a Xephyr window on the host that starts only when
+the program first connects to X (so a program that never uses X never causes a window). How it works:
+
+1. The host opens a display socket with `xephyr_run.lazy.LazyXephyr` (`/tmp/.X11-unix/X<n>`), but starts no Xephyr.
+2. The `ssh` command that runs the program adds `-R /tmp/.X11-unix/X0:<that socket>`, forwarding it into the VM as
+   display `:0`, and sets `DISPLAY=:0`. `ExitOnForwardFailure=yes` makes a failed forward an error, not a silent run without a display.
+3. When the program connects, the connection waits in the host socket's queue; `xephyr_run.cli.follow` sees it,
+   starts Xephyr on the socket, and keeps the program's window filling the Xephyr window.
+
+Settings, in priority order: the `--xephyr` / `--no-xephyr` flag of `pipvm run`, the app's saved setting
+(`pipvm set NAME xephyr on|off|default`), then the default, which is on. The commands in `~/.local/bin` pass no flag,
+so they follow the saved setting.
+
+The base image is set up for this (sshd allows remote forwards, Tk and a font are installed); see `image.PROVISION`,
+and raise `REVISION` when it changes, which rebuilds the base for new installs only.
+
 ## Tests
 ```bash
 python3 -m unittest discover -s tests

@@ -10,6 +10,8 @@ from .util import Error, log, tail
 
 GUEST_USER = "pipvm"   # the unprivileged user the installed programs run as
 ADMIN_USER = "root"    # only used to prepare the image and to power off cleanly; the guest is the jail
+GUEST_X_DIRECTORY = "/tmp/.X11-unix"
+GUEST_X_SOCKET = f"{GUEST_X_DIRECTORY}/X0"   # display :0 in the guest
 
 
 def _free_port():
@@ -96,21 +98,35 @@ class Machine:
             if not self.alive():
                 raise Error(f"the VM exited during boot (status {self.proc.returncode}).\n"
                             f"--- qemu:\n{tail(self.qemu_log)}\n--- console:\n{tail(self.console_log)}")
-            # stdin closed: ssh would otherwise read (and swallow) the input meant for the program
-            probe = subprocess.run(self._ssh() + [f"{user}@127.0.0.1", "true"], capture_output=True,
-                                   stdin=subprocess.DEVNULL)
+            # stdin closed: ssh would otherwise read (and swallow) the input meant for the program.
+            # The probe also makes the directory the forwarded X display socket will be put in.
+            probe = subprocess.run(self._ssh() + [f"{user}@127.0.0.1", f"mkdir -p {GUEST_X_DIRECTORY}"],
+                                   capture_output=True, stdin=subprocess.DEVNULL)
             if probe.returncode == 0:
                 return time.monotonic() - start
             time.sleep(0.2)
         raise Error(f"the VM did not accept ssh within {timeout}s.\n--- console:\n{tail(self.console_log)}")
 
-    def run_command(self, argv, user=GUEST_USER, tty=False):
-        """The ssh command line that runs argv in the guest. No argv: a login shell."""
+    def run_command(self, argv, user=GUEST_USER, tty=False, x_socket=None):
+        """The ssh command line that runs argv in the guest. No argv: a login shell.
+
+        With x_socket, the host's unix socket of that path is forwarded into the guest as display :0,
+        so an X program in the guest reaches the X server on the other end of it."""
+        display = ""
+        forward = []
+        if x_socket:
+            display = "DISPLAY=:0 "
+            forward = ["-o", "ExitOnForwardFailure=yes", "-o", "StreamLocalBindUnlink=yes",
+                       "-R", f"{GUEST_X_SOCKET}:{x_socket}"]
         if argv:
-            remote = 'PATH="$HOME/.local/bin:$PATH" exec ' + shlex.join(argv)
+            remote = display + 'PATH="$HOME/.local/bin:$PATH" exec ' + shlex.join(argv)
         else:
-            remote = "exec sh -l"
-        return self._ssh() + (["-tt"] if tty else ["-T"]) + [f"{user}@127.0.0.1", remote]
+            remote = display + "exec sh -l"
+        return self._ssh() + forward + (["-tt"] if tty else ["-T"]) + [f"{user}@127.0.0.1", remote]
+
+    def popen(self, argv, user=GUEST_USER, tty=False, x_socket=None):
+        """Start the command in the guest without waiting for it."""
+        return subprocess.Popen(self.run_command(argv, user, tty, x_socket))
 
     def run(self, argv, user=GUEST_USER, tty=False):
         """Run a command in the guest and return its exit status. Standard input, output and error

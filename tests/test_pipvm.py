@@ -28,6 +28,20 @@ class Names(unittest.TestCase):
                 apps.default_name(bad)
 
 
+class Image(unittest.TestCase):
+    def test_the_guest_allows_the_host_to_forward_its_display_socket_in(self):
+        # Alpine's sshd refuses remote forwards by default, and uses the first value it finds in its
+        # config, so the default line must be removed and not just overridden.
+        from pipvm import image
+        self.assertIn("AllowTcpForwarding remote", image.PROVISION)
+        self.assertIn("-e '/^#\\?AllowTcpForwarding/d'", image.PROVISION)
+        self.assertIn("StreamLocalBindUnlink yes", image.PROVISION)
+
+    def test_a_guest_can_draw_windows(self):
+        from pipvm import image
+        self.assertIn("python3-tkinter", image.PROVISION)
+
+
 class MachineCommand(unittest.TestCase):
     def machine(self, **kwargs):
         return Machine("/d/disk.qcow2", "/d/logs", key="/d/key", **kwargs)
@@ -55,6 +69,25 @@ class MachineCommand(unittest.TestCase):
         self.assertNotIn("root@127.0.0.1", command)
         self.assertIn("-T", command)   # no terminal: stdout and stderr stay separate
         self.assertEqual(command[-1], 'PATH="$HOME/.local/bin:$PATH" exec cowsay \'hello world\'')
+
+    def test_no_display_is_forwarded_unless_asked(self):
+        command = self.machine().run_command(["xeyes"])
+        self.assertNotIn("-R", command)
+        self.assertNotIn("DISPLAY", command[-1])
+
+    def test_a_display_is_forwarded_into_the_guest_as_display_zero(self):
+        command = self.machine().run_command(["xeyes"], x_socket="/tmp/.X11-unix/X93")
+        self.assertEqual(command[command.index("-R") + 1], "/tmp/.X11-unix/X0:/tmp/.X11-unix/X93")
+        self.assertIn("ExitOnForwardFailure=yes", command)   # no silent run without a display
+        self.assertTrue(command[-1].startswith("DISPLAY=:0 "))
+
+    def test_the_readiness_probe_makes_the_directory_for_the_display_socket(self):
+        machine = self.machine()
+        machine.proc = type("Running", (), {"poll": lambda self: None})()
+        with patch("subprocess.run") as run:
+            run.return_value.returncode = 0
+            machine.wait_ready()
+        self.assertEqual(run.call_args.args[0][-1], "mkdir -p /tmp/.X11-unix")
 
     def test_shell_gets_a_terminal(self):
         command = self.machine().run_command([], tty=True)
@@ -152,6 +185,65 @@ class Shims(unittest.TestCase):
         self.assertTrue((self.bin / "cowsay").exists())
 
 
+@unittest.skipUnless(shutil.which("qemu-img"), "qemu-img is not installed")
+class XephyrSetting(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        base = self.directory / "base.qcow2"
+        subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", str(base), "1M"], check=True)
+        self.environment = patch.dict(os.environ, {"XDG_DATA_HOME": str(self.directory),
+                                                   "XDG_CACHE_HOME": str(self.directory)})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.app = apps.create("tool", base, "tool")
+
+    def set(self, value):
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "xephyr", value]))
+
+    def run_tool(self, *options):
+        """Run the app through pipvm's run command, returning which way it ran (display or plain)."""
+        with patch("pipvm.cli.image.ensure_key", return_value=self.directory / "key"), \
+             patch("pipvm.cli.Machine") as machine, \
+             patch("pipvm.cli.run_with_display", return_value=0) as display:
+            plain = machine.return_value.__enter__.return_value.run
+            plain.return_value = 0
+            cli.run(cli.parser().parse_args(["run", *options, "tool"]))
+        return "display" if display.called else ("plain" if plain.called else "neither")
+
+    def test_xephyr_is_on_by_default(self):
+        self.assertTrue(cli.xephyr_wanted(None, self.app))
+        self.assertEqual(self.run_tool(), "display")
+
+    def test_the_saved_setting_changes_the_default(self):
+        self.set("off")
+        self.assertFalse(self.app.setting("xephyr"))
+        self.assertEqual(self.run_tool(), "plain")
+
+    def test_the_flag_beats_the_saved_setting(self):
+        self.set("off")
+        self.assertEqual(self.run_tool("--xephyr"), "display")
+        self.set("on")
+        self.assertEqual(self.run_tool("--no-xephyr"), "plain")
+
+    def test_default_forgets_the_saved_value(self):
+        self.set("off")
+        self.set("default")
+        self.assertIsNone(self.app.setting("xephyr"))
+        self.assertEqual(self.run_tool(), "display")
+
+    def test_unknown_settings_and_values_are_refused(self):
+        for arguments in (["set", "tool", "nonsense", "on"], ["set", "tool", "xephyr", "maybe"]):
+            with self.assertRaises(SystemExit), patch("sys.stderr"):
+                cli.parser().parse_args(arguments)
+
+    def test_list_shows_the_setting(self):
+        self.set("off")
+        with patch("builtins.print") as shown:
+            cli.list_apps(None)
+        self.assertIn("xephyr off", shown.call_args.args[0])
+
+
 class CommandLine(unittest.TestCase):
     def test_arguments_after_the_name_are_the_programs(self):
         args = cli.parser().parse_args(["run", "--net", "cowsay", "--", "-t", "hi"])
@@ -173,7 +265,7 @@ class CommandLine(unittest.TestCase):
                  patch("pipvm.cli.Machine") as machine:
                 apps.create("cowsay", base, "cowsay")
                 machine.return_value.__enter__.return_value.run.return_value = 0
-                self.assertEqual(cli.run(cli.parser().parse_args(["run", "cowsay", "--", "-t", "hi"])), 0)
+                self.assertEqual(cli.run(cli.parser().parse_args(["run", "--no-xephyr", "cowsay", "--", "-t", "hi"])), 0)
             options = machine.call_args.kwargs
             self.assertTrue(options["snapshot"])
             self.assertFalse(options["net"])
