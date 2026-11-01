@@ -1,0 +1,3 @@
+[submodule "xephyr-run"]
+	path = xephyr-run
+	url = git@github.com:talwrii/xephyr-run.git

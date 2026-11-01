@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pipvm"
+version = "0.1.0"
+description = "Like pipx, but each installed program runs in a throwaway virtual machine"
+readme = "README.md"
+requires-python = ">=3.9"
+# pipvm/xephyr_run is the xephyr-run git submodule (xephyr-run/), linked into the package by the symlink
+# pipvm/xephyr_run -> ../xephyr-run/xephyr_run. ziglang compiles its connect filter on first use.
+dependencies = ["ziglang"]
+
+[project.scripts]
+pipvm = "pipvm.cli:main"
+xephyr-run = "pipvm.xephyr_run.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pipvm*"]
+
+[tool.setuptools.package-data]
+"pipvm.xephyr_run" = ["*.c"]
