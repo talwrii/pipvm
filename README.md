@@ -13,6 +13,20 @@ or your network (unless you ask for the network).
 Only the virtual machine "backend" exists so far; the code is arranged so that others (podman, for
 example) can be added later.
 
+
+## Alternatives and prior work
+This is mostly a convenience wrapper around various tools (qemu, pipx, Xephyr) you could use these directly.
+
+Sharing data can be a pain. For tigher interaction I made a tool called [ptrace-approve] which allows you to 
+approve individual system calls - this might be more convenient in these use cases with the price of more
+configuration. If your use cases are simplare you can use this.
+
+## Caveats
+The most annoying thing about these tools is sharing data and resources which often make VMs unusable.
+I am partly making this tool as a game to practice using VMs where I can "secure" things which have easy data requirements.
+
+There is quiter a lot of overhead of running VMs.
+
 ## Usage
 ```bash
 pipvm install cowsay                    # builds a base image the first time, then installs with pipx in a VM

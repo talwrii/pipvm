@@ -4,6 +4,8 @@ Run X11 programs in xephyr jails so that they cannot talk to other X11 and perfo
 Thin wrapper around Xephyr which deals with some defaults and tracks xephyr X11 sessions.
 Has some seccomp syscall filtering magic to prevent the jailed process from talking to other X sessions.
 
+This is part of the pipvm project. Changes are made then and this code is released.
+
 AI-generated and unreviewed. Mostly tested by the AI itself.
 
 Run one X client in its own named [Xephyr](https://www.freedesktop.org/wiki/Software/Xephyr/)
