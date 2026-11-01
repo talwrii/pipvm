@@ -12,8 +12,8 @@ sys.path.insert(0, str(SUBREPO))
 
 
 class SubrepoPresent(unittest.TestCase):
-    def test_the_xephyr_run_submodule_is_checked_out(self):
-        self.assertTrue(TESTS.is_dir(), "xephyr-run/ is empty: run `git submodule update --init`")
+    def test_the_xephyr_run_subrepo_is_present(self):
+        self.assertTrue(TESTS.is_dir(), "xephyr-run/ is missing: it is a git subrepo (see DEVELOPMENT.md)")
 
 
 class ThroughThePipvmPackage(unittest.TestCase):
