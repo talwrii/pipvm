@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/ingydotnet/git-subrepo#readme
+;
+[subrepo]
+	remote = git@github.com:talwrii/xephyr-run.git
+	branch = master
+	commit = f54e8a31eaa9b461ccbdfc6cdb8daac9350306b6
+	parent = 7a8df4de5bf50754f589e122c3a525032c087eb9
+	method = merge
+	cmdver = 0.4.9
