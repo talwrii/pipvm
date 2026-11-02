@@ -3,8 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pipvm"
-version = "0.1.0"
+# PyPI does not allow the name "pipvm", so the package is published as pip-vm; the command is still pipvm.
+name = "pip-vm"
+version = "0.1.1"
 description = "Like pipx, but each installed program runs in a throwaway virtual machine"
 readme = "README.md"
 requires-python = ">=3.9"

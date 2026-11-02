@@ -20,17 +20,14 @@ if ! git diff-index --quiet HEAD --; then
     exit 1
 fi
 
-git push
- 
 if [ -f pyproject.toml ]; then
     VERSION=$(cat pyproject.toml | toml2json | jq -rc '.project.version')
 else
     VERSION=$(python3 setup.py --version)
 fi
 
-git tag "$VERSION"
-git push --tags
-
+# Build and upload before pushing or tagging: PyPI can refuse a release (a blocked or taken name, a
+# version that already exists), and a refused release should not leave a pushed tag behind.
 rm -rf dist *.egg-info build
 
 if [ -f pyproject.toml ]; then
@@ -39,7 +36,12 @@ else
     python3 setup.py sdist
 fi
 
-twine upload -p $(cat token) dist/*
+twine check dist/*
+twine upload --verbose -p $(cat token) dist/*
+
+git push
+git tag "$VERSION"
+git push --tags
 
 # Close ControlMaster
 ssh -o ControlPath="$CONTROL_PATH" -O exit git@github.com 2>/dev/null || true
