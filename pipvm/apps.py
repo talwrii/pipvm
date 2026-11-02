@@ -20,6 +20,11 @@ def apps_dir():
     return data_dir() / "apps"
 
 
+def host_config_directory():
+    """Where your configuration lives on the host: ~/.config, or $XDG_CONFIG_HOME."""
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+
+
 def default_name(spec):
     """The package name inside a pip requirement such as 'Foo_Bar[extra]==1.2', normalised as pip does."""
     match = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", spec.strip())

@@ -8,12 +8,15 @@ import tempfile
 
 from . import apps, image
 from .util import Error, log
-from .vm import GUEST_USER, Machine
+from .vm import GUEST_HOME, GUEST_USER, Machine, Share
 from .xephyr_run import cli as xephyr
 from .xephyr_run import lazy
 
 # Per-app settings that `pipvm set` knows about, and what they mean.
-SETTINGS = {"xephyr": "show the program's windows in a Xephyr window that starts when it first uses X (default: on)"}
+SETTINGS = {
+    "xephyr": "show the program's windows in a Xephyr window that starts when it first uses X (default: on)",
+    "config": "let the program see your ~/.config/<app>, read-only, if it exists (default: on)",
+}
 VALUES = {"on": True, "off": False, "default": None}
 
 
@@ -44,10 +47,41 @@ def install(args):
     return 0
 
 
+def supports(app, minimum):
+    """Whether the image the app was made on is new enough (image.DISPLAY_REVISION, image.SHARE_REVISION)."""
+    return image.base_revision(app.info().get("base", "")) >= minimum
+
+
+def reinstall_hint(app):
+    return f"pipvm uninstall {app.name} && pipvm install {app.spec()}"
+
+
+def feature_wanted(setting, flag, app, minimum, what):
+    """Whether to use an optional feature: this run's flag wins, then the app's saved setting, then the
+    default, which is on. An app made on an image too old for the feature runs without it, unless it was
+    asked for outright."""
+    wanted = flag if flag is not None else app.setting(setting, True)
+    if wanted and not supports(app, minimum):
+        if flag:
+            raise Error(f"{app.name} was installed on an older image that cannot {what}; "
+                        f"reinstall it: {reinstall_hint(app)}")
+        return False
+    return wanted
+
+
 def xephyr_wanted(flag, app):
-    """Whether to show the program's windows: this run's flag wins, then the app's saved setting,
-    then the default, which is on."""
-    return flag if flag is not None else app.setting("xephyr", True)
+    return feature_wanted("xephyr", flag, app, image.DISPLAY_REVISION, "show windows")
+
+
+def config_share(flag, app):
+    """Your ~/.config/<app> from the host, read-only, as ~/.config/<app> in the VM; None if the feature is
+    off, the app's image is too old for it, or you have no such directory."""
+    if not feature_wanted("config", flag, app, image.SHARE_REVISION, "be given your configuration"):
+        return None
+    host = apps.host_config_directory() / app.name
+    if not host.is_dir():
+        return None
+    return Share(host, "config", f"{GUEST_HOME}/.config/{app.name}", readonly=True)
 
 
 def run_with_display(machine, argv, title, tty=False):
@@ -71,12 +105,18 @@ def run(args):
     command = args.args[1:] if args.args[:1] == ["--"] else args.args
     argv = [args.exe or app.name, *command] if not args.shell else []
     key = image.ensure_key()
+    if image.base_revision(app.info().get("base", "")) < image.REVISION:
+        log(f"{app.name} was installed on an older image, so it may lack windows or your ~/.config/{app.name}. "
+            f"To update it: {reinstall_hint(app)}")
     # Everything the program writes to its disk is thrown away when it stops, and unless --net is
-    # given it has no network. A new machine is started for every run.
+    # given it has no network. Your ~/.config/<app> is visible to it, read-only. A new machine is
+    # started for every run.
+    config = config_share(args.config, app)
     with tempfile.TemporaryDirectory(prefix="pipvm-run-") as logs:
         with Machine(app.disk, logs, key=key, net=args.net, snapshot=True, memory=args.memory,
-                     cpus=args.cpus) as machine:
+                     cpus=args.cpus, shares=[config] if config else []) as machine:
             machine.wait_ready()
+            machine.mount_shares()
             if xephyr_wanted(args.xephyr, app):
                 return run_with_display(machine, argv, app.name, tty=args.shell)
             return machine.run(argv, user=GUEST_USER, tty=args.shell)
@@ -123,6 +163,9 @@ def parser():
     runner.add_argument("--net", action="store_true", help="Give the program internet access (none by default)")
     runner.add_argument("--exe", help="The program to run (default: the app's name)")
     runner.add_argument("--shell", action="store_true", help="Open a shell in the VM instead")
+    runner.add_argument("--config", action=argparse.BooleanOptionalAction, default=None,
+                        help="Show the program your ~/.config/<app> (read-only), or not. Without this, the app's "
+                             "saved setting is used (see `pipvm set`), and then the default: on")
     runner.add_argument("--xephyr", action=argparse.BooleanOptionalAction, default=None,
                         help="Show the program's windows in a lazily started Xephyr window, or not. "
                              "Without this, the app's saved setting is used (see `pipvm set`), and then the default: on")

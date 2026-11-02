@@ -1,5 +1,6 @@
 """The VM image: download Alpine's cloud image once, verify it, and add Python, pipx and ssh to it."""
 import hashlib
+import os
 import re
 import shutil
 import subprocess
@@ -17,7 +18,15 @@ BASE_URL = f"https://dl-cdn.alpinelinux.org/alpine/v{ALPINE.rpartition('.')[0]}/
 DISK_SIZE = "8G"  # the cloud image is only 128 MiB: far too small to install programs in. Its
                   # first-boot agent (tiny-cloud) grows the filesystem to fill the disk.
 # Raise this whenever PROVISION changes, so images prepared the old way are rebuilt.
-REVISION = 3
+REVISION = 4
+DISPLAY_REVISION = 3   # the first image whose sshd lets the host forward its display socket in
+SHARE_REVISION = 4     # the first image whose guest user has the host's uid, so shared host files are accessible
+
+
+def base_revision(path):
+    """The revision in a prepared image's file name (alpine-...-pipvm-r4.qcow2), or 0 if it has none."""
+    match = re.search(r"-r(\d+)\.qcow2$", str(path))
+    return int(match[1]) if match else 0
 
 # Run once, as root, inside the VM by tiny-cloud, from the config disk. tiny-cloud keeps
 # its output in /var/log/user-data.log, which pipvm reads back if this fails.
@@ -39,9 +48,10 @@ apk add --no-cache python3 py3-pip pipx openssh ca-certificates
 # What a graphical Python program needs to draw on a display forwarded from the host: Tk and a font.
 apk add --no-cache python3-tkinter font-dejavu
 
-# Installed programs run as an ordinary user. Only the key pipvm made may log in, as that user
-# (to run programs) or as root (to power off cleanly): nothing else has a way in.
-adduser -D -s /bin/sh pipvm
+# Installed programs run as an ordinary user, with the host user's uid so that the host's files shared into
+# the VM are readable by it. Only the key pipvm made may log in, as that user (to run programs) or as root
+# (to mount directories and power off cleanly): nothing else has a way in.
+adduser -D -s /bin/sh -u @UID@ pipvm
 echo "pipvm:$(head -c 24 /dev/urandom | base64)" | chpasswd
 echo "root:$(head -c 24 /dev/urandom | base64)" | chpasswd
 for home in /root /home/pipvm; do
@@ -126,7 +136,7 @@ def _make_seed(directory, pubkey):
     """A small disk labelled `cidata`, from which the image's first-boot agent reads PROVISION."""
     directory = Path(directory)
     (directory / "meta-data").write_text("instance-id: pipvm-prepare\nlocal-hostname: pipvm\n")
-    (directory / "user-data").write_text(PROVISION.replace("@PUBKEY@", pubkey))
+    (directory / "user-data").write_text(PROVISION.replace("@PUBKEY@", pubkey).replace("@UID@", str(os.getuid())))
     seed = directory / "seed.iso"
     result = subprocess.run(["xorriso", "-as", "mkisofs", "-quiet", "-o", str(seed), "-V", "cidata",
                              "-J", "-r", str(directory / "meta-data"), str(directory / "user-data")],

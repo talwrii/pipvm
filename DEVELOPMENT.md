@@ -30,6 +30,14 @@ so they follow the saved setting.
 The base image is set up for this (sshd allows remote forwards, Tk and a font are installed); see `image.PROVISION`,
 and raise `REVISION` when it changes, which rebuilds the base for new installs only.
 
+## Your configuration
+`pipvm run` also shows the program your `~/.config/<app>` (or `$XDG_CONFIG_HOME/<app>`), **read-only**, at the same place
+in the VM, when that directory exists. It is shared with QEMU's 9p (`-virtfs`) and the guest user has your uid so it can
+read your files. Turn it off with `--no-config` or `pipvm set NAME config off`. Symlinks inside it that point outside the
+directory show up dangling in the VM: QEMU's file sharing never follows a link out of a shared directory.
+
+Apps remember the image they were made on; one too old for a feature runs without it, and asking for it outright is an error.
+
 ## Tests
 ```bash
 python3 -m unittest discover -s tests

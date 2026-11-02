@@ -70,6 +70,47 @@ class MachineCommand(unittest.TestCase):
         self.assertIn("-T", command)   # no terminal: stdout and stderr stay separate
         self.assertEqual(command[-1], 'PATH="$HOME/.local/bin:$PATH" exec cowsay \'hello world\'')
 
+    def test_extra_environment_is_quoted(self):
+        command = self.machine().run_command(["env"], env={"MESSAGE": "two words; rm -rf /"})
+        self.assertIn("MESSAGE='two words; rm -rf /' ", command[-1])
+
+    def test_shared_directories_become_virtfs_arguments(self):
+        from pipvm.vm import Share
+        machine = self.machine(shares=[Share(Path("/h/a"), "a", "/home/pipvm/.config/a"),
+                                       Share(Path("/h/b"), "b", "/home/pipvm/.config/b", readonly=True)])
+        command = machine.command()
+        virtfs = [command[index + 1] for index, word in enumerate(command) if word == "-virtfs"]
+        self.assertEqual(len(virtfs), 2)
+        self.assertIn("path=/h/a,mount_tag=a", virtfs[0])
+        self.assertNotIn("readonly", virtfs[0])
+        self.assertIn("readonly=on", virtfs[1])
+
+    def test_shares_are_mounted_by_root_and_read_only_ones_stay_read_only(self):
+        from pipvm.vm import Share
+        machine = self.machine(shares=[Share(Path("/h/a"), "a", "/home/pipvm/.config/a", readonly=True)])
+        with patch("subprocess.run") as run:
+            run.return_value.returncode = 0
+            machine.mount_shares()
+        command = run.call_args.args[0]
+        self.assertIn("root@127.0.0.1", command)
+        self.assertIn("trans=virtio,version=9p2000.L,msize=262144,ro a /home/pipvm/.config/a", command[-1])
+        # the directory above the mount point was made by root, so it is handed back to the user
+        self.assertIn("chown pipvm:pipvm /home/pipvm/.config ", command[-1])
+
+    def test_nothing_is_run_when_there_are_no_shares(self):
+        with patch("subprocess.run") as run:
+            self.machine().mount_shares()
+        run.assert_not_called()
+
+    def test_a_failed_mount_is_reported(self):
+        from pipvm.vm import Share
+        with patch("subprocess.run") as run:
+            run.return_value.returncode = 1
+            run.return_value.stderr = "mount: no such device"
+            with self.assertRaises(Error) as caught:
+                self.machine(shares=[Share(Path("/h"), "a", "/home/pipvm/.config/a")]).mount_shares()
+        self.assertIn("no such device", str(caught.exception))
+
     def test_no_display_is_forwarded_unless_asked(self):
         command = self.machine().run_command(["xeyes"])
         self.assertNotIn("-R", command)
@@ -190,13 +231,17 @@ class XephyrSetting(unittest.TestCase):
     def setUp(self):
         self.directory = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.directory, True)
-        base = self.directory / "base.qcow2"
+        base = self.directory / "alpine-3.24.1-pipvm-r4.qcow2"   # an image new enough for every feature
         subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", str(base), "1M"], check=True)
         self.environment = patch.dict(os.environ, {"XDG_DATA_HOME": str(self.directory),
-                                                   "XDG_CACHE_HOME": str(self.directory)})
+                                                   "XDG_CACHE_HOME": str(self.directory),
+                                                   "XDG_CONFIG_HOME": str(self.directory / "config")})
         self.environment.start()
         self.addCleanup(self.environment.stop)
         self.app = apps.create("tool", base, "tool")
+        old = self.directory / "alpine-3.24.1-pipvm-r1.qcow2"
+        subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", str(old), "1M"], check=True)
+        self.old_app = apps.create("old", old, "old-package")
 
     def set(self, value):
         cli.set_setting(cli.parser().parse_args(["set", "tool", "xephyr", value]))
@@ -242,6 +287,70 @@ class XephyrSetting(unittest.TestCase):
         with patch("builtins.print") as shown:
             cli.list_apps(None)
         self.assertIn("xephyr off", shown.call_args.args[0])
+
+
+@unittest.skipUnless(shutil.which("qemu-img"), "qemu-img is not installed")
+class ConfigDirectory(XephyrSetting):
+    """~/.config/<app> from the host, shown to the program read-only. Reuses the setup of XephyrSetting."""
+
+    def setUp(self):
+        super().setUp()
+        self.config = self.directory / "config" / "tool"
+        self.config.mkdir(parents=True)
+
+    def test_the_apps_config_directory_is_mounted_read_only_where_the_app_expects_it(self):
+        share = cli.config_share(None, self.app)
+        self.assertEqual(share.host, self.config)
+        self.assertEqual(share.mountpoint, "/home/pipvm/.config/tool")
+        self.assertTrue(share.readonly)
+
+    def test_nothing_is_mounted_when_you_have_no_such_directory(self):
+        self.config.rmdir()
+        self.assertIsNone(cli.config_share(None, self.app))
+
+    def test_it_can_be_turned_off_by_setting_and_by_flag(self):
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "config", "off"]))
+        self.assertIsNone(cli.config_share(None, self.app))
+        self.assertIsNotNone(cli.config_share(True, self.app))      # the flag beats the saved setting
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "config", "default"]))
+        self.assertIsNotNone(cli.config_share(None, self.app))
+        self.assertIsNone(cli.config_share(False, self.app))
+
+    def test_the_setting_is_separate_from_the_xephyr_one(self):
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "config", "off"]))
+        self.assertTrue(cli.xephyr_wanted(None, self.app))
+
+    def test_an_app_on_an_old_image_gets_neither_feature_but_still_runs(self):
+        (self.directory / "config" / "old").mkdir()
+        self.assertIsNone(cli.config_share(None, self.old_app))
+        self.assertFalse(cli.xephyr_wanted(None, self.old_app))
+
+    def test_asking_for_a_feature_an_old_image_cannot_do_is_an_error(self):
+        for ask in (lambda: cli.config_share(True, self.old_app), lambda: cli.xephyr_wanted(True, self.old_app)):
+            with self.assertRaises(Error) as caught:
+                ask()
+            self.assertIn("pipvm uninstall old && pipvm install old-package", str(caught.exception))
+        self.assertFalse(cli.xephyr_wanted(False, self.old_app))     # opting out is always fine
+
+    def test_revisions_are_read_from_the_image_name(self):
+        from pipvm import image
+        self.assertEqual(image.base_revision("/x/alpine-3.24.1-pipvm-r4.qcow2"), 4)
+        self.assertEqual(image.base_revision("/x/alpine-3.24.1-pipvm-r12.qcow2"), 12)
+        self.assertEqual(image.base_revision("/x/base.qcow2"), 0)
+
+    def test_run_mounts_the_config_directory_and_the_flag_can_stop_it(self):
+        for options, expected in (([], True), (["--no-config"], False)):
+            with patch("pipvm.cli.image.ensure_key", return_value=self.directory / "key"), \
+                 patch("pipvm.cli.run_with_display", return_value=0), \
+                 patch("pipvm.cli.Machine") as machine:
+                cli.run(cli.parser().parse_args(["run", *options, "tool"]))
+            shares = machine.call_args.kwargs["shares"]
+            self.assertEqual(len(shares) == 1, expected)
+            self.assertEqual(machine.return_value.__enter__.return_value.mount_shares.called, True)
+
+    def test_the_guest_user_gets_the_hosts_uid_so_shared_files_are_readable(self):
+        from pipvm import image
+        self.assertIn("-u @UID@ pipvm", image.PROVISION)
 
 
 class CommandLine(unittest.TestCase):
