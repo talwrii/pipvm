@@ -291,18 +291,18 @@ class XephyrSetting(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("qemu-img"), "qemu-img is not installed")
 class ConfigDirectory(XephyrSetting):
-    """~/.config/<app> from the host, shown to the program read-only. Reuses the setup of XephyrSetting."""
+    """~/.config/<app> from the host, shared with the program read-write. Reuses the setup of XephyrSetting."""
 
     def setUp(self):
         super().setUp()
         self.config = self.directory / "config" / "tool"
         self.config.mkdir(parents=True)
 
-    def test_the_apps_config_directory_is_mounted_read_only_where_the_app_expects_it(self):
+    def test_the_apps_config_directory_is_mounted_read_write_where_the_app_expects_it(self):
         share = cli.config_share(None, self.app)
         self.assertEqual(share.host, self.config)
         self.assertEqual(share.mountpoint, "/home/pipvm/.config/tool")
-        self.assertTrue(share.readonly)
+        self.assertFalse(share.readonly)     # so the program can keep its settings
 
     def test_nothing_is_mounted_when_you_have_no_such_directory(self):
         self.config.rmdir()
@@ -329,7 +329,7 @@ class ConfigDirectory(XephyrSetting):
         for ask in (lambda: cli.config_share(True, self.old_app), lambda: cli.xephyr_wanted(True, self.old_app)):
             with self.assertRaises(Error) as caught:
                 ask()
-            self.assertIn("pipvm uninstall old && pipvm install old-package", str(caught.exception))
+            self.assertIn("pip-vm uninstall old && pip-vm install old-package", str(caught.exception))
         self.assertFalse(cli.xephyr_wanted(False, self.old_app))     # opting out is always fine
 
     def test_revisions_are_read_from_the_image_name(self):
@@ -380,6 +380,125 @@ class CommandLine(unittest.TestCase):
             self.assertFalse(options["net"])
             run = machine.return_value.__enter__.return_value.run
             self.assertEqual(run.call_args.args[0], ["cowsay", "-t", "hi"])
+
+
+class LocalProject(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.project = self.directory / "My_Tool"
+        self.project.mkdir()
+        (self.project / "pyproject.toml").write_text("[project]\nname='x'\n")
+
+    def test_only_path_like_specs_are_local(self):
+        self.assertEqual(cli.local_source(str(self.project)), self.project.resolve())
+        self.assertIsNone(cli.local_source("cowsay"))
+        with patch("pathlib.Path.cwd", return_value=self.directory):
+            (self.directory / "cowsay").mkdir()                          # a directory called cowsay in the cwd
+            self.assertIsNone(cli.local_source("cowsay"))                 # is still the package on PyPI
+
+    def test_a_path_that_is_not_a_project_is_refused(self):
+        (self.directory / "empty").mkdir()
+        for bad in (str(self.directory / "empty"), str(self.directory / "missing"), "./nope"):
+            with self.assertRaises(Error):
+                cli.local_source(bad)
+
+    def test_install_shares_the_directory_read_only_and_builds_it_in_the_vm(self):
+        environment = {"XDG_DATA_HOME": str(self.directory / "data"), "XDG_CACHE_HOME": str(self.directory),
+                       "PIPVM_BIN_DIR": str(self.directory / "bin")}
+        base = self.directory / "alpine-3.24.1-pipvm-r5.qcow2"
+        if shutil.which("qemu-img"):
+            subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", str(base), "1M"], check=True)
+        else:
+            self.skipTest("qemu-img is not installed")
+        with patch.dict(os.environ, environment), \
+             patch("pipvm.cli.image.ensure_prepared", return_value=base), \
+             patch("pipvm.cli.image.ensure_key", return_value=self.directory / "key"), \
+             patch("pipvm.cli.Machine") as machine, patch("pipvm.cli.log"):
+            vm = machine.return_value.__enter__.return_value
+            vm.run.return_value = 0
+            vm.output.return_value = "my-tool\n"
+            cli.install(cli.parser().parse_args(["install", str(self.project)]))
+            app = apps.get("my-tool")                                       # named after the directory
+            self.assertEqual(app.spec(), str(self.project.resolve()))
+        share = machine.call_args.kwargs["shares"][0]
+        self.assertTrue(share.readonly)
+        self.assertEqual(share.host, self.project.resolve())
+        vm.mount_shares.assert_called_once()
+        command = vm.run.call_args.args[0]
+        self.assertEqual(command[:2], ["sh", "-c"])
+        self.assertIn("pipx install /tmp/pipvm-src", command[2])           # built in the VM, not on the host
+
+
+@unittest.skipUnless(shutil.which("qemu-img"), "qemu-img is not installed")
+class VmEmulator(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.environment = patch.dict(os.environ, {"XDG_DATA_HOME": str(self.directory),
+                                                   "XDG_CACHE_HOME": str(self.directory),
+                                                   "XDG_CONFIG_HOME": str(self.directory / "config")})
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+
+    def app(self, name, revision):
+        base = self.directory / f"alpine-3.24.1-pipvm-r{revision}.qcow2"
+        subprocess.run(["qemu-img", "create", "-q", "-f", "qcow2", str(base), "1M"], check=True)
+        return apps.create(name, base, name)
+
+    def run_app(self, app, *options):
+        """Run the app through pipvm's run command; returns the commands handed to the display and to a plain run."""
+        with patch("pipvm.cli.image.ensure_key", return_value=self.directory / "key"), \
+             patch("pipvm.cli.Machine") as machine, \
+             patch("pipvm.cli.run_with_display", return_value=0) as display:
+            plain = machine.return_value.__enter__.return_value.run
+            plain.return_value = 0
+            cli.run(cli.parser().parse_args(["run", *options, app.name, "--", "-x"]))
+        return display, plain
+
+    def test_off_by_default(self):
+        app = self.app("tool", 5)
+        self.assertFalse(cli.vm_emulator_wanted(app))
+        display, _ = self.run_app(app)
+        self.assertEqual(display.call_args.args[1], ["tool", "-x"])      # a plain display run: no xterm
+
+    def test_install_flag_is_known_and_the_setting_can_be_changed_later(self):
+        self.assertTrue(cli.parser().parse_args(["install", "--vm-emulator", "tool"]).vm_emulator)
+        self.assertFalse(cli.parser().parse_args(["install", "tool"]).vm_emulator)
+        app = self.app("tool", 5)
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "vm-emulator", "on"]))
+        self.assertTrue(app.setting("vm-emulator"))
+        cli.set_setting(cli.parser().parse_args(["set", "tool", "vm-emulator", "default"]))
+        self.assertIsNone(app.setting("vm-emulator"))
+
+    def test_the_saved_setting_runs_the_program_in_an_xterm_in_the_display(self):
+        app = self.app("tool", 5)
+        app.set_setting("vm-emulator", True)
+        display, plain = self.run_app(app)
+        command = display.call_args.args[1]
+        self.assertEqual(command[0], "xterm")
+        self.assertEqual(command[command.index("-e") + 1:], ["tool", "-x"])   # the program, and its arguments
+        self.assertFalse(plain.called)
+
+    def test_the_command_for_a_shell_has_no_program_to_run(self):
+        command = cli.vm_emulator_command([], "tool")
+        self.assertNotIn("-e", command)
+        self.assertIn("-ls", command)
+
+    def test_an_app_on_an_old_image_runs_without_it_instead_of_failing(self):
+        app = self.app("old", 4)
+        app.set_setting("vm-emulator", True)
+        with patch("pipvm.cli.log") as said:
+            self.assertFalse(cli.vm_emulator_wanted(app))
+        self.assertIn("pip-vm install old", said.call_args.args[0])         # it says how to get the feature
+        display, _ = self.run_app(app)
+        self.assertEqual(display.call_args.args[1], ["old", "-x"])
+
+    def test_it_cannot_be_combined_with_no_xephyr(self):
+        app = self.app("tool", 5)
+        app.set_setting("vm-emulator", True)
+        with self.assertRaises(Error):
+            self.run_app(app, "--no-xephyr")
 
 
 if __name__ == "__main__":

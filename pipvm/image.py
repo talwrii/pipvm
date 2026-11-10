@@ -18,9 +18,10 @@ BASE_URL = f"https://dl-cdn.alpinelinux.org/alpine/v{ALPINE.rpartition('.')[0]}/
 DISK_SIZE = "8G"  # the cloud image is only 128 MiB: far too small to install programs in. Its
                   # first-boot agent (tiny-cloud) grows the filesystem to fill the disk.
 # Raise this whenever PROVISION changes, so images prepared the old way are rebuilt.
-REVISION = 4
+REVISION = 6
 DISPLAY_REVISION = 3   # the first image whose sshd lets the host forward its display socket in
 SHARE_REVISION = 4     # the first image whose guest user has the host's uid, so shared host files are accessible
+VM_EMULATOR_REVISION = 5   # the first image with a terminal emulator (xterm), to run text programs in a window
 
 
 def base_revision(path):
@@ -47,6 +48,8 @@ say "provisioning started"
 apk add --no-cache python3 py3-pip pipx openssh ca-certificates
 # What a graphical Python program needs to draw on a display forwarded from the host: Tk and a font.
 apk add --no-cache python3-tkinter font-dejavu
+# A terminal emulator, so a text program can run in a window of its own (pip-vm install --vm-emulator).
+apk add --no-cache xterm
 
 # Installed programs run as an ordinary user, with the host user's uid so that the host's files shared into
 # the VM are readable by it. Only the key pipvm made may log in, as that user (to run programs) or as root

@@ -29,22 +29,22 @@ There is quiter a lot of overhead of running VMs.
 
 ## Usage
 ```bash
-pipvm install cowsay                    # builds a base image the first time, then installs with pipx in a VM
+pip-vm install cowsay                    # builds a base image the first time, then installs with pipx in a VM
 cowsay -t "hello"                       # a command like pipx's: each run starts a fresh VM; stdin, stdout, stderr and exit status are forwarded
-pipvm run cowsay -- -t "hello"          # the same without the command on your PATH
-echo hi | pipvm run --exe cat cowsay    # --exe: the program to run, when it is not named like the package
-pipvm run --net httpie -- example.com   # let this run use the internet (it has none by default)
-pipvm run --shell cowsay                # a shell in the VM, to look around
-pipvm list
-pipvm uninstall cowsay
+pip-vm run cowsay -- -t "hello"          # the same without the command on your PATH
+echo hi | pip-vm run --exe cat cowsay    # --exe: the program to run, when it is not named like the package
+pip-vm run --net httpie -- example.com   # let this run use the internet (it has none by default)
+pip-vm run --shell cowsay                # a shell in the VM, to look around
+pip-vm list
+pip-vm uninstall cowsay
 ```
 Options for `run` go before the app's name; everything after `--` is passed to the program.
 
 `install` writes a small script for each command the package provides into `~/.local/bin` (or
-`$PIPVM_BIN_DIR`), like pipx does. The script just runs `pipvm run --exe COMMAND NAME -- "$@"`, so the
+`$PIPVM_BIN_DIR`), like pipx does. The script just runs `pip-vm run --exe COMMAND NAME -- "$@"`, so the
 command always runs in a VM. A file that is already there and is not pipvm's own script is never overwritten
-(pipvm says so, and you can still use `pipvm run --exe`). `uninstall` removes only the scripts pipvm wrote.
-Commands started this way have no network; to give one network access run it with `pipvm run --net` instead.
+(pipvm says so, and you can still use `pip-vm run --exe`). `uninstall` removes only the scripts pipvm wrote.
+Commands started this way have no network; to give one network access run it with `pip-vm run --net` instead.
 
 * The program runs in the guest as an unprivileged user. QEMU itself runs as you, not root.
 * A **new machine is started for every run**, and everything the program writes to its disk is thrown

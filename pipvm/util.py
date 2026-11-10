@@ -21,7 +21,7 @@ def data_dir():
 
 
 def log(message):
-    print(f"pipvm: {message}", file=sys.stderr, flush=True)
+    print(f"pip-vm: {message}", file=sys.stderr, flush=True)
 
 
 def tail(path, lines=25):

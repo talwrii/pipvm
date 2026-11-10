@@ -14,7 +14,7 @@ relative imports (`from . import registry`) so that it works under both names. I
 its own with pipx, the two fight over the `xephyr-run` command; use one of them.
 
 ## The display (Xephyr)
-By default `pipvm run` gives the program an X display, shown in a Xephyr window on the host that starts only when
+By default `pip-vm run` gives the program an X display, shown in a Xephyr window on the host that starts only when
 the program first connects to X (so a program that never uses X never causes a window). How it works:
 
 1. The host opens a display socket with `xephyr_run.lazy.LazyXephyr` (`/tmp/.X11-unix/X<n>`), but starts no Xephyr.
@@ -23,17 +23,19 @@ the program first connects to X (so a program that never uses X never causes a w
 3. When the program connects, the connection waits in the host socket's queue; `xephyr_run.cli.follow` sees it,
    starts Xephyr on the socket, and keeps the program's window filling the Xephyr window.
 
-Settings, in priority order: the `--xephyr` / `--no-xephyr` flag of `pipvm run`, the app's saved setting
-(`pipvm set NAME xephyr on|off|default`), then the default, which is on. The commands in `~/.local/bin` pass no flag,
+Settings, in priority order: the `--xephyr` / `--no-xephyr` flag of `pip-vm run`, the app's saved setting
+(`pip-vm set NAME xephyr on|off|default`), then the default, which is on. The commands in `~/.local/bin` pass no flag,
 so they follow the saved setting.
 
 The base image is set up for this (sshd allows remote forwards, Tk and a font are installed); see `image.PROVISION`,
 and raise `REVISION` when it changes, which rebuilds the base for new installs only.
 
 ## Your configuration
-`pipvm run` also shows the program your `~/.config/<app>` (or `$XDG_CONFIG_HOME/<app>`), **read-only**, at the same place
-in the VM, when that directory exists. It is shared with QEMU's 9p (`-virtfs`) and the guest user has your uid so it can
-read your files. Turn it off with `--no-config` or `pipvm set NAME config off`. Symlinks inside it that point outside the
+`pip-vm run` also shares your `~/.config/<app>` (or `$XDG_CONFIG_HOME/<app>`), **read-write**, at the same place in the
+VM, when that directory exists, so the program can keep its settings. It is shared with QEMU's 9p (`-virtfs`) and the
+guest user has your uid so it can read and write your files there. A program in the VM can therefore change that
+directory; if the host version of the tool acts on what is in it, treat the contents as untrusted. Turn the sharing off
+with `--no-config` or `pip-vm set NAME config off`. Symlinks inside it that point outside the
 directory show up dangling in the VM: QEMU's file sharing never follows a link out of a shared directory.
 
 Apps remember the image they were made on; one too old for a feature runs without it, and asking for it outright is an error.

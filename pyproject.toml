@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-# PyPI does not allow the name "pipvm", so the package is published as pip-vm; the command is still pipvm.
+# PyPI does not allow the name "pipvm", so the package is published as pip-vm; the command is pip-vm (pipvm still works).
 name = "pip-vm"
 version = "0.1.1"
 description = "Like pipx, but each installed program runs in a throwaway virtual machine"
@@ -14,6 +14,7 @@ requires-python = ">=3.9"
 dependencies = ["ziglang"]
 
 [project.scripts]
+pip-vm = "pipvm.cli:main"
 pipvm = "pipvm.cli:main"
 xephyr-run = "pipvm.xephyr_run.cli:main"
 

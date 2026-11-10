@@ -115,7 +115,7 @@ def write_shims(app, exes, directory=None, pipvm=None):
     """A command for each program the package installed. Returns (written, skipped); a file that is
     already there and is not this app's shim is never overwritten."""
     directory = directory or bin_dir()
-    pipvm = pipvm or os.path.abspath(shutil.which("pipvm") or sys.argv[0])
+    pipvm = pipvm or os.path.abspath(shutil.which("pip-vm") or shutil.which("pipvm") or sys.argv[0])
     directory.mkdir(parents=True, exist_ok=True)
     written, skipped = [], []
     for exe in exes:
@@ -157,7 +157,7 @@ def create(name, base, spec, root=None):
 def get(name, root=None):
     app = App(name, root)
     if not app.exists():
-        raise Error(f"{name} is not installed. Install it with: pipvm install {name}")
+        raise Error(f"{name} is not installed. Install it with: pip-vm install {name}")
     return app
 
 
